@@ -1,6 +1,6 @@
 from argparse import ArgumentParser
 from collections import defaultdict
-import json
+from imp import load_source
 import os
 import re
 from urlparse import urlparse
@@ -48,11 +48,10 @@ def getPath(subfolder=None):
   return path
 
 
-def saveImage(url, filename, gallery=None):
+def save_image(url, filename, gallery=None):
   """
   Save the specified image to the disk in an optional gallery folder.
   """
-  global total_count, gallery_count
   complete = False
   path = getPath(gallery) + filename
 
@@ -84,85 +83,77 @@ def saveImage(url, filename, gallery=None):
       complete = True
   else:
     complete = True
+
   if complete:
-    if arguments.verbosity > 2:
-      print '%s saved' % path
+    report('%s saved' % path, 3)
+    global total_count, gallery_count
     total_count += 1
     if gallery is not None:
       gallery_count[gallery] += 1
 
 
-def scrapePhotoShelter(url):
-  if arguments.verbosity > 0:
-    print 'Using PhotoShelter scraper\n'
-
-  def getFullResPath(path):
-    return re.sub(r'fit=(\/fill=)?(\d+)x(\d+)', 'fit=100000x100000', path)
-
-  def parseImageDetailPage(det_page):
-    images = det_page.find_all(class_='imageWidget')
-    if not images:
-      return False
-    try:
-      filename = det_page.find(itemprop='name').string
-    except:
-      filename = None
-    for image_path in (x.find('img')['src'] for x in images if x.find('img') is not None):
-      if filename is None:
-        search_result = re.search(r'\/([\w\d-\.]+)$', image_path)
-        image_filename = search_reesult.group(1) if search_result is not None else None
-      else:
-        image_filename = filename
-      saveImage(getFullResPath(image_path), image_filename)
-
-  def parseImageGallery(gal_page):
-    if not gal_page.find(class_='thumbsContainer'):
-      return
-    gallery_header = gal_page.find(class_='galInfo').find('h1')
-    gallery_title = gallery_header.string if gallery_header else None
-    thumbnails = gal_page.find_all(class_='thumbnail')
-    for thumbnail in thumbnails:
-      link = thumbnail.a['href']
-      if link.startswith('/gallery/') or link.startswith('/gallery-collection/'):
-        global root_url
-        new_page = session.get(root_url + link, cookies={'thmOpt': '5000%7C0'})
-        if new_page.status_code == 200:
-          new_soup = BeautifulSoup(new_page.text, 'lxml')
-          parseImageGallery(new_soup)
-      elif link.startswith('/gallery-image/'):
-        img_tag = thumbnail.find('img')
-        if not img_tag:
-          continue
-        image_path = getFullResPath(img_tag['src'])
-        data = json.loads(img_tag['data-gal-img-thumb'])
-        image_filename = data['I_FILE_NAME'] if data and data['I_FILE_NAME'] else None
-        saveImage(image_path, image_filename, gallery_title)
-
-    if gallery_title is not None and gallery_count[gallery_title] > 0 and arguments.verbosity > 1:
-      print 'Saved %(count)s images to "%(title)s"\n' % {
-        'count': gallery_count[gallery_title],
-        'title': gallery_title
-      }
-
-  # Set a cookie to ensure all images are loaded in the gallery
-  page = session.get(url, cookies={'thmOpt': '5000%7C0'})
-  soup = BeautifulSoup(page.text, 'lxml')
-  if soup.find(class_='imageWidget'):
-    parseImageDetailPage(soup)
-  else:
-    parseImageGallery(soup)
+def report(message, verbosity=0):
+  """
+  Print out a console message if the minimum verbosity is met.
+  """
+  if arguments.verbosity >= verbosity:
+    print message
 
 
-def scrapeJAlbum(url):
-  if arguments.verbosity > 0:
-    print 'Using jAlbum scraper\n'
-  print 'The jAlbum scraper is not ready yet, come back later'
+def report_gallery(name):
+  """
+  Print out a console message indicating the number of images saved in a certain gallery.
+  """
+  global gallery_count
+  if gallery_count[name] > 0:
+    report('Saved %(count)s images to "%(title)s"\n' % {
+      'count': gallery_count[name],
+      'title': name
+    })
 
 
-def scrapeGeneric(url):
-  if arguments.verbosity > 0:
-    print 'Using generic scraper\n'
+def parseGeneric(url):
   print 'The Generic scraper is not ready yet, come back later'
+
+
+def loadParsers():
+  """
+  Load any python files in the parser directory.
+  """
+  parser_directory = 'parsers/'
+  if not os.path.exists(parser_directory):
+    return false
+  files = os.listdir(parser_directory)
+  modules = dict()
+  for file in (x for x in files if x.endswith('.py')):
+    name = file.rstrip('.py')
+    # https://stackoverflow.com/questions/67631/how-to-import-a-module-given-the-full-path
+    module = load_source('%s' % name, parser_directory + file)
+    display_name = module.verbose_name if hasattr(module, 'verbose_name') else name
+    if not hasattr(module, 'parse'):
+      report('=> %s parser not loaded because it lacks the parse() method' % display_name, 3)
+    elif not hasattr(module, 'pattern'):
+      report('=> %s parser not loaded because it lacks the pattern regex' % display_name, 3)
+    else:
+      report('=> %s parser loaded' % display_name, 3)
+      modules[display_name] = module
+  if len(modules) == 0:
+    return None
+  report('', 3)
+  return modules
+
+
+def chooseParser(domain, modules):
+  """
+  Search through the list of modules to find one whose pattern matches the
+  domain provided. If no matches are found, use the generic parser.
+  """
+  for name, module in modules.iteritems():
+    if module.pattern.search(domain):
+      report('Using %s praser\n' % name, 1)
+      return module.parse
+  report('Using generic parser\n', 1)
+  return parseGeneric
 
 
 def main():
@@ -173,18 +164,22 @@ def main():
   global root_url
   root_url = '%s://%s' % (parsed_url.scheme, parsed_url.netloc)
 
-  if arguments.test and arguments.verbosity > 0:
-    print 'Running in testing mode, no images will be saved'
+  if arguments.test:
+    report('Running in testing mode, no images will be saved\n', 1)
 
-  if re.search(r'photoshelter\.com', parsed_url.netloc):
-    scrapePhotoShelter(url)
-  elif re.search(r'jalbum\.net', parsed_url.netloc):
-    scrapeJAlbum(url)
+  modules = loadParsers()
+  if modules is not None:
+    parse_method = chooseParser(parsed_url.netloc, modules)
   else:
-    scrapeGeneric(url)
+    parse_method = parseGeneric
 
+  parse_method(url)
+
+  global total_count
   if total_count > 0:
     parser.exit(message='== Saved a total of %s images ==\n' % total_count)
+  else:
+    parser.exit(message='== No images were downloaded ==\n')
 
 if __name__ == '__main__':
   main()
