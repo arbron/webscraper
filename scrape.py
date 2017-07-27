@@ -68,8 +68,7 @@ def save_image(url, filename, gallery=None):
 
   if os.path.isfile(path) and not arguments.overwrite:
     if arguments.skip:
-      if arguments.verbosity > 2:
-        print '%s already exists and was skipped'
+      report('%s already exists and was skipped' % path, 3)
       return
     else:
       path = generateNewFilePath(path)
@@ -85,7 +84,7 @@ def save_image(url, filename, gallery=None):
     complete = True
 
   if complete:
-    report('%s saved' % path, 3)
+    report('%s saved (%s)' % (path, url), 3)
     global total_count, gallery_count
     total_count += 1
     if gallery is not None:

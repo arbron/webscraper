@@ -15,7 +15,8 @@ def get_full_res_path(path):
   """
   Return the path to the highest resolution image available.
   """
-  return re.sub(r'fit=(\/fill=)?(\d+)x(\d+)', 'fit=100000x100000', path)
+  path = re.sub(r'fill=((\d)+x(\d)+)\/', '', path)
+  return re.sub(r'fit=((\d+)x(\d+))?\/', 'fit=100000x100000/', path)
 
 
 def parse_image_page(page):
@@ -49,7 +50,7 @@ def parse_gallery_page(page):
       if new_page.status_code == 200:
         new_soup = BeautifulSoup(new_page.text, 'lxml')
         parse_gallery_page(new_soup)
-    elif link.startswith('/gallery-image/'):
+    elif link.startswith('/gallery-image/') or link.startswith('/image'):
       img_tag = thumbnail.find('img')
       if not img_tag:
         continue
